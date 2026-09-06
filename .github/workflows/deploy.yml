@@ -92,9 +92,13 @@ jobs:
           ls -la /srv/frontend/dev
 
       - name: Confirm nginx is serving it
+        # https, not http: port 80 redirects to 443, so an http request
+        # returns an empty 301 body and this check never matches. -k
+        # because the certificate is self-signed - we are verifying that
+        # the right bytes are served, not the certificate chain.
         run: |
           for i in $(seq 1 15); do
-            if curl -fsS -H 'Host: dev.catalog.com' http://catalog-nginx/ | grep -q '<div id="root">'; then
+            if curl -fsSk -H 'Host: dev.catalog.com' https://catalog-nginx/ | grep -q '<div id="root">'; then
               echo "nginx is serving the application"
               exit 0
             fi
