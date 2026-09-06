@@ -1,0 +1,128 @@
+# Deployment.
+#
+# Triggered only by a push to main, which the ruleset means can only
+# happen by merging a pull request. A fork cannot produce a push event on
+# a protected branch, so no external code reaches the self-hosted runner.
+#
+# Build once, deploy the same bytes: the bundle is built and checked on a
+# GitHub-hosted runner, and the self-hosted runner copies that exact
+# artifact into the volume nginx serves.
+
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-frontend
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    outputs:
+      sha256: ${{ steps.digest.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+
+      - name: Record the artifact digest
+        id: digest
+        # Hash the file list and contents in a stable order, so the same
+        # source always produces the same digest.
+        run: |
+          SHA=$(cd dist && find . -type f | sort | xargs sha256sum | sha256sum | cut -d' ' -f1)
+          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
+          echo "built: $SHA"
+          du -sh dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: dist
+          retention-days: 7
+
+  deploy:
+    name: Deploy to dev
+    needs: build
+    runs-on: [self-hosted, frontend]
+    steps:
+      # No checkout: this job needs the built artifact, not the source.
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: dist
+
+      - name: Verify the artifact is the one that was built
+        run: |
+          ACTUAL=$(cd dist && find . -type f | sort | xargs sha256sum | sha256sum | cut -d' ' -f1)
+          echo "expected: ${{ needs.build.outputs.sha256 }}"
+          echo "actual  : $ACTUAL"
+          [ "$ACTUAL" = "${{ needs.build.outputs.sha256 }}" ] \
+            || { echo "::error::digest does not match the built artifact"; exit 1; }
+
+      - name: Publish to the volume nginx serves
+        # Staged then swapped, rather than copied over the live directory.
+        # A copy in place serves a half-updated site for its duration -
+        # index.html referencing an asset that has not arrived yet.
+        run: |
+          set -e
+          rm -rf /srv/frontend/dev.new
+          mkdir -p /srv/frontend/dev.new
+          cp -R dist/. /srv/frontend/dev.new/
+
+          rm -rf /srv/frontend/dev.old
+          [ -d /srv/frontend/dev ] && mv /srv/frontend/dev /srv/frontend/dev.old
+          mv /srv/frontend/dev.new /srv/frontend/dev
+
+          echo "published:"
+          ls -la /srv/frontend/dev
+
+      - name: Confirm nginx is serving it
+        run: |
+          for i in $(seq 1 15); do
+            if curl -fsS -H 'Host: dev.catalog.com' http://catalog-nginx/ | grep -q '<div id="root">'; then
+              echo "nginx is serving the application"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::nginx did not serve index.html"
+          exit 1
+
+      - name: Roll back on failure
+        if: failure()
+        run: |
+          if [ -d /srv/frontend/dev.old ]; then
+            rm -rf /srv/frontend/dev
+            mv /srv/frontend/dev.old /srv/frontend/dev
+            echo "rolled back to the previous build"
+          else
+            echo "no previous build to roll back to"
+          fi
+
+      - name: Summary
+        if: success()
+        run: |
+          {
+            echo "### Deployed to dev"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Commit | \`${GITHUB_SHA:0:7}\` |"
+            echo "| Bundle SHA-256 | \`${{ needs.build.outputs.sha256 }}\` |"
+            echo "| URL | https://dev.catalog.com |"
+          } >> "$GITHUB_STEP_SUMMARY"
