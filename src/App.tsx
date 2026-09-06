@@ -35,6 +35,12 @@ export default function App() {
     }
   }, [category, includeInactive]);
 
+  /*
+   * Deliberate. The lint rule warns about setState inside an effect, but
+   * fetching from a server is exactly the case effects exist for -
+   * synchronising with an external system. `load` is memoised on the
+   * filters, so this refetches when they change and not otherwise.
+   */
   useEffect(() => {
     void load();
   }, [load]);
@@ -204,6 +210,9 @@ export default function App() {
         </section>
 
         <ProductForm
+          // Changing the key remounts the form, which resets its fields
+          // to the product being edited without an effect doing it.
+          key={editing?.id ?? 'new'}
           editing={editing}
           fieldErrors={fieldErrors}
           saving={saving}

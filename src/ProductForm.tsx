@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import type { Product, ProductRequest } from './types';
 
 const EMPTY: ProductRequest = {
@@ -18,23 +18,26 @@ interface Props {
   onCancel: () => void;
 }
 
+/*
+ * State is initialised from props once, and the parent passes a key that
+ * changes when `editing` changes, so React discards this component and
+ * builds a fresh one. That replaces the more common pattern of resetting
+ * state inside an effect, which renders once with stale values before
+ * correcting itself.
+ */
 export function ProductForm({ editing, fieldErrors, saving, onSubmit, onCancel }: Props) {
-  const [form, setForm] = useState<ProductRequest>(EMPTY);
-
-  useEffect(() => {
-    setForm(
-      editing
-        ? {
-            sku: editing.sku,
-            name: editing.name,
-            description: editing.description ?? '',
-            price: editing.price,
-            category: editing.category,
-            stockQuantity: editing.stockQuantity,
-          }
-        : EMPTY,
-    );
-  }, [editing]);
+  const [form, setForm] = useState<ProductRequest>(() =>
+    editing
+      ? {
+          sku: editing.sku,
+          name: editing.name,
+          description: editing.description ?? '',
+          price: editing.price,
+          category: editing.category,
+          stockQuantity: editing.stockQuantity,
+        }
+      : EMPTY,
+  );
 
   function set<K extends keyof ProductRequest>(key: K, value: ProductRequest[K]) {
     setForm((f) => ({ ...f, [key]: value }));
