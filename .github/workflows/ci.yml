@@ -1,0 +1,74 @@
+# Pull request gate.
+#
+# GitHub-hosted runners only. pull_request fires for forks, so this
+# workflow can be asked to execute a stranger's code - and this repository
+# has a self-hosted runner attached for deployment. That runner must never
+# see a pull request.
+
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+env:
+  GITLEAKS_VERSION: "8.30.1"
+
+jobs:
+  build:
+    name: Build and check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # gitleaks detect walks history, not the worktree
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      # npm ci, not npm install: it installs exactly what package-lock.json
+      # pins and fails if the lockfile and package.json disagree. npm
+      # install would quietly resolve new versions, so a build could differ
+      # from the one that was reviewed.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      # tsc -b runs as part of `npm run build`, so a type error fails here.
+      - name: Type-check and build
+        run: npm run build
+
+      - name: Check the bundle size
+        # A frontend bundle grows silently, one dependency at a time. This
+        # is a floor to notice it, not a hard budget.
+        run: |
+          BYTES=$(find dist/assets -name '*.js' -exec cat {} + | wc -c)
+          KB=$((BYTES / 1024))
+          echo "bundle: ${KB} KB uncompressed"
+          if [ "$KB" -gt 600 ]; then
+            echo "::warning::bundle is ${KB} KB, over the 600 KB soft limit"
+          fi
+
+      - name: Scan for secrets
+        run: |
+          curl -sSfL -o gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          tar xzf gitleaks.tar.gz gitleaks
+          ./gitleaks detect --source . --redact --no-banner
+
+      - name: Audit dependencies
+        # Advisory rather than blocking: npm audit reports transitive
+        # issues in build tooling that never reach the browser, and a gate
+        # that cries wolf gets ignored.
+        run: npm audit --audit-level=high || echo "::warning::npm audit reported findings"
