@@ -1,7 +1,7 @@
 # Catalog Administration
 
 The administration console for the
-[ecommerce-catalog](https://github.com/shashikirankulkarni/ecommerce-catalog) service.
+[ecommerce-catalog-service](https://github.com/shashikirankulkarni/ecommerce-catalog-service) service.
 React 19, Vite, TypeScript.
 
 A single screen: list, filter, create, edit, deactivate and reactivate products. Deployed
